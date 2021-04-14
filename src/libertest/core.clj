@@ -63,33 +63,30 @@
 ;; TODO: don't manually set :end, that's an impl detail
 ;; Not needed currently, delete if not used by the time this is finished
 #_(defn next-over [loc]
-  (cond
-    (zip/end? loc) loc
-    (some? (zip/right loc)) (zip/right loc)
-    (some? (zip/up loc)) (recur (zip/up loc))
-    :else (assoc loc 1 :end)))
+    (cond
+      (zip/end? loc) loc
+      (some? (zip/right loc)) (zip/right loc)
+      (some? (zip/up loc)) (recur (zip/up loc))
+      :else (assoc loc 1 :end)))
 
 (defn map-tree [filter-f map-f tree]
   (loop [loc (make-zipper tree)]
     (cond
-      (zip/end?) (zip/root loc)
+      (zip/end? loc) (zip/root loc)
       (filter-f loc) (recur (zip/next (map-f loc)))
       :else (recur (zip/next loc)))))
 
 (defn around-each [f & trees]
   (empty-node
-   (vec
-    (for [tree trees]
-      (loop [loc (make-zipper tree)]
-        (cond
-          (zip/end? loc) (zip/root loc)
-          (zip/branch? loc) (recur (zip/next loc))
-          :else (recur
-                 (zip/next
-                  (zip/edit loc update ::code #(fn [] (f %)))))))))))
+   (mapv (partial map-tree
+                  #(= ::assertion (::type (zip/node %)))
+                  (fn [loc] (zip/edit loc update ::code #(fn [] (f %)))))
+         trees)))
 
-(defn around [f tree]
-  nil)
+(defn around-all [f & trees]
+  {::type ::hook
+   ::code f
+   ::children trees})
 
 (defmethod show ::hook
   [x]
@@ -99,10 +96,11 @@
   (def tree (show (around-each (fn [f] (prn "outer") (f))
                                (group "baz"
                                       (around-each (fn [f] (prn "inner") (f))
-                                                   (group "foo"
-                                                          (assertion "a1" (test/is (= 1 (inc 0))))
-                                                          (group "bar"
-                                                                 (assertion "a2" (test/is (not= 2 (inc 3))))))
+                                                   (around-all (fn [f] (prn "around-all") (f))
+                                                               (group "foo"
+                                                                      (assertion "a1" (test/is (= 1 (inc 0))))
+                                                                      (group "bar"
+                                                                             (assertion "a2" (test/is (not= 2 (inc 3)))))))
                                                    (assertion "a3" (test/is (= 1 (dec 2)))))))))
   (assertion (test/is (= 1 1)))
 
