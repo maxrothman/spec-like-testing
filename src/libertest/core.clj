@@ -2,10 +2,20 @@
   (:require [clojure.test :as test]
             [clojure.zip :as zip]))
 
+(defn spy
+  ([x]
+   (prn x)
+   x)
+  ([msg x]
+   (prn msg)
+   x))
+
 (defmulti show ::type)
 (defmethod show :default
   [x]
   (prn x))
+
+(defmulti run ::type)
 
 ;; TODO: support tagging assertions with names
 ;; will require digging into clojure.test internals
@@ -16,6 +26,10 @@
     ::name ~name
     ::code (fn [] ~@forms)})
 
+(defmethod run ::assertion
+  [node]
+  ((::code node)))
+
 (defmethod show ::assertion
   [x]
   [::assertion (::name x) (::code x)])
@@ -24,6 +38,10 @@
   {::type ::group
    ::name name
    ::children (vec trees)})
+
+(defmethod run ::group
+  [node]
+  (run! run (::children node)))
 
 (defmethod show ::group
   [x]
@@ -37,16 +55,6 @@
                 ;; I guess "make-node" would be better named as "set-children"?
                 #_(update node ::children #(into (or % []) children)))
               root))
-(def node (assertion "foo" inc))
-(update node ::children into [node])
-
-(defn spy
-  ([x]
-   (prn x)
-   x)
-  ([msg x]
-   (prn msg)
-   x))
 
 (defn empty-node
   "An placeholder node that does nothing except have children.
@@ -54,6 +62,10 @@
   [children]
   {::type ::empty
    ::children children})
+
+(defmethod run ::empty
+  [node]
+  (run! run (::children node)))
 
 (defmethod show ::empty
   [x]
@@ -79,7 +91,10 @@
 (defn around-each [f & trees]
   (empty-node
    (mapv (partial map-tree
-                  #(= ::assertion (::type (zip/node %)))
+                  ;; Using isa? to support extenders creating their own extension node types. They
+                  ;; can just derive their ::type from ::asertion and this definition won't know the
+                  ;; difference.
+                  #(isa? (::type (zip/node %)) ::assertion)
                   (fn [loc] (zip/edit loc update ::code #(fn [] (f %)))))
          trees)))
 
@@ -88,20 +103,25 @@
    ::code f
    ::children trees})
 
+(defmethod run ::hook
+  [node]
+  ((::code node) #(run! run (::children node))))
+
 (defmethod show ::hook
   [x]
   [::hook (::code x) (mapv show (::children x))])
 
 (comment
-  (def tree (show (around-each (fn [f] (prn "outer") (f))
-                               (group "baz"
-                                      (around-each (fn [f] (prn "inner") (f))
-                                                   (around-all (fn [f] (prn "around-all") (f))
-                                                               (group "foo"
-                                                                      (assertion "a1" (test/is (= 1 (inc 0))))
-                                                                      (group "bar"
-                                                                             (assertion "a2" (test/is (not= 2 (inc 3)))))))
-                                                   (assertion "a3" (test/is (= 1 (dec 2)))))))))
+  (def tree (around-each (fn [f] (prn "outer") (f))
+                         (group "baz"
+                                (around-each (fn [f] (prn "inner") (f))
+                                             (around-all (fn [f] (prn "around-all") (f))
+                                                         (group "foo"
+                                                                (assertion "a1" (test/is (= 1 (inc 0))))
+                                                                (group "bar"
+                                                                       (assertion "a2" (test/is (not= 2 (inc 3)))))))
+                                             (assertion "a3" (test/is (= 1 (dec 2))))))))
+  (run tree)
   (assertion (test/is (= 1 1)))
 
   (map (comp :name zip/node)
